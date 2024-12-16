@@ -1,5 +1,5 @@
-# Script Name: AzureRegionalVcpuChecker_Filtered.ps1
-# Version: 1.7.0
+# Updated Script: AzureRegionalVcpuChecker_Filtered.ps1
+# Version: 1.7.4
 # Date: YYYY-MM-DD
 
 # Define parameters
@@ -22,6 +22,21 @@ function Write-Log {
         "Error" { Write-Host "[ERROR] $Message" -ForegroundColor Red }
         default { Write-Host "[UNKNOWN] $Message" -ForegroundColor White }
     }
+}
+
+function Format-Restrictions {
+    param (
+        [array]$Restrictions
+    )
+
+    if ($null -eq $Restrictions) {
+        return "None"
+    }
+
+    $formattedRestrictions = $Restrictions | ForEach-Object {
+        "Type: $($_.Type), Reason: $($_.ReasonCode), Locations: $($_.RestrictionInfo.Locations -join ", ")"
+    }
+    return ($formattedRestrictions -join "; ")
 }
 
 # Function to validate PowerShell version
@@ -114,14 +129,17 @@ function Get-SkuFamilyQuota {
         }
 
         Write-Log -Message "Available D-series and E-series SKU families in region $Region that support Premium Disks:" -Type "Info"
+
         foreach ($sku in $filteredSkus) {
             if ($sku.LocationInfo) {
                 foreach ($info in $sku.LocationInfo) {
                     $zones = if ($info.Zones) { $info.Zones -join ", " } else { "None" }
-                    Write-Log -Message "  SKU: $($sku.Name), Location: $($info.Location), Zones: $zones" -Type "Info"
+                    $restrictions = Format-Restrictions -Restrictions $sku.Restrictions
+
+                    Write-Log -Message "SKU: $($sku.Name), Location: $($info.Location), Zones: $zones, Restrictions: $restrictions" -Type "Info"
                 }
             } else {
-                Write-Log -Message "  SKU: $($sku.Name), Zones: None (No LocationInfo available)" -Type "Info"
+                Write-Log -Message "SKU: $($sku.Name), Zones: None (No LocationInfo available), Restrictions: None" -Type "Info"
             }
         }
     } catch {
