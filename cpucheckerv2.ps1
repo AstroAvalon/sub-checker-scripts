@@ -1,11 +1,12 @@
 # Updated Script: AzureRegionalVcpuChecker_Filtered.ps1
-# Version: 1.7.4
+# Version: 1.7.8
 # Date: YYYY-MM-DD
 
 # Define parameters
 param (
-    [string[]]$SubscriptionIds = @("4a660082-72db-449f-8041-1f8d83cb35bc"),
+    [string[]]$SubscriptionIds = @(""),
     [string]$Region = "westus3",
+    [string[]]$Skus = @("Standard_E8-4ads_v5", "Standard_E8ads_v5"),
     [switch]$DetailedQuotaOutput
 )
 
@@ -78,9 +79,9 @@ function Set-AzSubscriptionContext {
 
     try {
         Set-AzContext -SubscriptionId $SubscriptionId -ErrorAction Stop | Out-Null
-        Write-Log -Message "Subscription context successfully set to: $($SubscriptionId)" -Type "Info"
+        Write-Log -Message "Subscription context successfully set to: ${SubscriptionId}" -Type "Info"
     } catch {
-        Write-Log -Message "Failed to set context to subscription: $($SubscriptionId). Ensure the subscription ID is valid." -Type "Error"
+        Write-Log -Message "Failed to set context to subscription: ${SubscriptionId}. Ensure the subscription ID is valid." -Type "Error"
         return $false
     }
     return $true
@@ -96,7 +97,7 @@ function Get-RegionalVcpuAvailability {
         $allQuotas = Get-AzVMUsage -Location "$Region" -ErrorAction Stop
 
         if ($DetailedOutput) {
-            Write-Log -Message "Available quota entries in region $($Region):" -Type "Info"
+            Write-Log -Message "Available quota entries in region ${Region}:" -Type "Info"
             $allQuotas | ForEach-Object { Write-Log -Message "  Name: $($_.Name.Value), CurrentValue: $($_.CurrentValue), Limit: $($_.Limit)" -Type "Info" }
         }
 
@@ -105,32 +106,33 @@ function Get-RegionalVcpuAvailability {
             $available = [int]$quota.Limit - [int]$quota.CurrentValue
             return @{ Limit = $quota.Limit; CurrentValue = $quota.CurrentValue; Available = $available }
         } else {
-            Write-Log -Message "No matching vCPU data found for region: $($Region)." -Type "Warning"
+            Write-Log -Message "No matching vCPU data found for region: ${Region}." -Type "Warning"
             return $null
         }
     } catch {
-        Write-Log -Message "Error retrieving vCPU data for region: $($Region). Details: $_" -Type "Error"
+        Write-Log -Message "Error retrieving vCPU data for region: ${Region}. Details: $_" -Type "Error"
         return $null
     }
 }
 
 function Get-SkuFamilyQuota {
     param (
-        [string]$Region
+        [string]$Region,
+        [string[]]$Skus
     )
 
     try {
         $vmSkus = Get-AzComputeResourceSku -Location "$Region" -ErrorAction Stop
 
-        # Filter only D-series and E-series SKUs
-        $filteredSkus = $vmSkus | Where-Object {
-            ($_.ResourceType -eq "virtualMachines") -and
-            ($_.Name -match "^(Standard_D|Standard_E).+s")
-        }
+        # Loop through each user-specified SKU and check its existence
+        foreach ($skuName in $Skus) {
+            $sku = $vmSkus | Where-Object { ($_.ResourceType -eq "virtualMachines") -and ($_.Name -eq $skuName) }
 
-        Write-Log -Message "Available D-series and E-series SKU families in region $Region that support Premium Disks:" -Type "Info"
+            if ($null -eq $sku) {
+                Write-Log -Message "SKU: $skuName is not available in region ${Region}." -Type "Warning"
+                continue
+            }
 
-        foreach ($sku in $filteredSkus) {
             if ($sku.LocationInfo) {
                 foreach ($info in $sku.LocationInfo) {
                     $zones = if ($info.Zones) { $info.Zones -join ", " } else { "None" }
@@ -143,7 +145,7 @@ function Get-SkuFamilyQuota {
             }
         }
     } catch {
-        Write-Log -Message "Error retrieving SKU family data for region: $Region. Details: $_" -Type "Error"
+        Write-Log -Message "Error retrieving SKU family data for region: ${Region}. Details: $_" -Type "Error"
     }
 }
 
@@ -162,28 +164,28 @@ Start-AzSession
 
 foreach ($SubscriptionId in $SubscriptionIds) {
     Write-Log -Message "==========================================" -Type "Info"
-    Write-Log -Message "Processing subscription: $($SubscriptionId)" -Type "Info"
+    Write-Log -Message "Processing subscription: ${SubscriptionId}" -Type "Info"
     Write-Log -Message "==========================================" -Type "Info"
 
     if (-not (Set-AzSubscriptionContext -SubscriptionId $SubscriptionId)) {
-        Write-Log -Message "Skipping subscription: $($SubscriptionId) due to context setting failure." -Type "Warning"
+        Write-Log -Message "Skipping subscription: ${SubscriptionId} due to context setting failure." -Type "Warning"
         continue
     }
 
-    Write-Log -Message "Retrieving vCPU availability for region: $($Region)" -Type "Info"
+    Write-Log -Message "Retrieving vCPU availability for region: ${Region}" -Type "Info"
     $vcpuData = Get-RegionalVcpuAvailability -Region $Region -DetailedOutput:$DetailedQuotaOutput
 
     if ($vcpuData) {
-        Write-Log -Message "vCPU Availability for Region: $($Region)" -Type "Info"
+        Write-Log -Message "vCPU Availability for Region: ${Region}" -Type "Info"
         Write-Log -Message "  Limit: $($vcpuData.Limit)" -Type "Info"
         Write-Log -Message "  Current Usage: $($vcpuData.CurrentValue)" -Type "Info"
         Write-Log -Message "  Available: $($vcpuData.Available)" -Type "Info"
     } else {
-        Write-Log -Message "No vCPU data available for region: $($Region) in subscription: $($SubscriptionId)." -Type "Warning"
+        Write-Log -Message "No vCPU data available for region: ${Region} in subscription: ${SubscriptionId}." -Type "Warning"
     }
 
-    Write-Log -Message "Retrieving D-series and E-series SKU family quota for region: $($Region)" -Type "Info"
-    Get-SkuFamilyQuota -Region $Region
+    Write-Log -Message "Retrieving specified SKUs for region: ${Region}" -Type "Info"
+    Get-SkuFamilyQuota -Region $Region -Skus $Skus
 
     Write-Log -Message "==========================================" -Type "Info"
 }
